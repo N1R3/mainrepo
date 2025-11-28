@@ -1,0 +1,167 @@
+Установка ELK v7 без logstash для отправки логов запросами напрямую в эластик
+Если у вас нет пакета apt-transport-https, то надо установить
+
+apt install apt-transport-https
+
+добавляем репозиторий 
+яндекс зеркало для ELK 7 версии  echo "deb [trusted=yes] https://mirror.yandex.ru/mirrors/elastic/7/ stable main" | sudo tee /etc/apt/sources.list.d/elastic-7.x.list
+яндекс зеркало для ELK 8 версии  echo "deb [trusted=yes] https://mirror.yandex.ru/mirrors/elastic/8/ stable main" | sudo tee /etc/apt/sources.list.d/elastic-8.x.list
+
+устанвливаем еластик apt update && apt install elasticsearch
+
+После установки добавляем elasticsearch в автозагрузку и запускаем
+# systemctl daemon-reload
+# systemctl enable elasticsearch.service
+# systemctl start elasticsearch.service
+включаем безопасность дописываем снизу конфигурации по пути /etc/elasticsearch/elasticsearch.yml  параметр xpack.security.enabled: true
+и настраиваем пароли в интеркативном режиме с помощью команды /usr/share/elasticsearch/bin/elasticsearch-setup-passwords interactive 
+
+В файле по пути /etc/elasticsearch/elasticsearch.yml  указываем параметры path.data: /var/lib/elasticsearch # директория для хранения данных
+                                                                          network.host: 10.0.0.0/8 # слушаем нашу сеть либо 0.0.0.0 что бы слушал все сетевые интерфейсы либо укажите нужный 
+                                                                          http.port: 9200
+                                                                          http.host: 0.0.0.0 # слушаем все либо сеть по не обходимости 
+                                                                          xpack.security.transport.ssl.
+                                                                            enabled: false              ( 7мая версия может внезапно начать ругаться и не запускаться на то что нет этой строки, добовляем ее в конфиг и выключаем значением фальс)   
+                                                                          cluster.initial_master_nodes: ["elksrv"] по скольку эластик считает себя кластером, ему нужно указать мастер ноду 
+                                     
+делаем рестарт systemctl restart elasticsearch.service и проверяем 
+ss -tulnp | grep 9200
+
+
+Проверим теперь, что elasticsearch действительно нормально работает. Выполним к нему простой запрос об его статусе. Здесь нам уже пригодится учётная запись с правами доступа к кластеру. Неавторизованные запросы, а также запросы по HTTP в 8-й версии elasticsearch не принимаются
+curl -k --user elastic:'yourpassword' https://127.0.0.1:9200 
+
+
+
+Запускаем установку Kibana: apt update && apt install kibana
+Добавляем Кибана в автозагрузку и запускаем # systemctl daemon-reload
+                                            # systemctl enable kibana.service
+                                            # systemctl start kibana.service
+systemctl status kibana.service
+
+
+проверяем что порт доступен  
+ss -tulnp | grep 5601
+
+в файле /etc/kibana/kibana.yml указываем адрес сервера 
+Файл с настройками Кибана располагается по пути - /etc/kibana/kibana.yml. На начальном этапе нам нужно корректно настроить подключение к серверу elasticsearch. 
+По умолчанию Kibana слушает только localhost и не позволяет подключаться удаленно. Это нормальная ситуация, если у вас будет на этом же сервере установлен nginx в качестве reverse proxy, который будет принимать подключения и проксировать их в Кибана.
+Надо разрешить Кибана слушать внешний интерфейс и принимать подключения. Измените параметр server.host, указав ip адрес сервера, например вот так:
+Если хотите, чтобы она слушала все интерфейсы, укажите в качестве адреса 0.0.0.0.
+Проксирование будет идти через наш прокси и ссл сертификаты для подключения он будет брать оттуда, но нужны самоподписные сертификаты что бы стэк запустился.
+Короче тут опять не обошлось без приключений и если захочешь поменять прослушивание интерфейса с локал хост на определенную сеть или сети и на прослушивание всех сетей, то при перезапуске эластика он просто не запустится из-за безопасности, при таких настройках нужны SSL сертификаты, ниже напишу как сделать с самоподписными
+Перейдём в директорию Elasticsearch и создадим сертификаты с помощью встроенной утилиты `elasticsearch-certutil`:
+cd /usr/share/elasticsearch/
+# Создадим сертификат формата PKCS#12 (рекомендуемый подход):
+sudo bin/elasticsearch-certutil cert -out /etc/elasticsearch/elastic-certificates.p12 -pass ""
+
+Затем настраиваем правильные права доступа:
+sudo chown elasticsearch:elasticsearch /etc/elasticsearch/elastic-certificates.p12
+sudo chmod 660 /etc/elasticsearch/elastic-certificates.p12
+Теперь для Kibana создадим отдельный сертификат (через OpenSSL):
+sudo mkdir -p /etc/kibana/certs
+sudo openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+ -keyout /etc/kibana/certs/kibana.key -out /etc/kibana/certs/kibana.crt \
+ -subj "/CN=172.28.2.27"
+
+Установим права на сертификаты Kibana:
+sudo chown kibana:kibana /etc/kibana/certs/*
+sudo chmod 600 /etc/kibana/certs/*
+Настройка Elasticsearch для работы с SSL: Открываем конфигурационный файл Elasticsearch:
+sudo nano /etc/elasticsearch/elasticsearch.yml
+Добавляем (или меняем) следующие параметры:
+network.host: 172.28.2.27
+# Безопасность Elasticsearch:
+xpack.security.enabled: true
+# SSL для внутреннего транспорта (между узлами Elasticsearch):
+xpack.security.transport.ssl.enabled: true
+xpack.security.transport.ssl.verification_mode: certificate
+xpack.security.transport.ssl.keystore.path: elastic-certificates.p12
+xpack.security.transport.ssl.truststore.path: elastic-certificates.p12
+# SSL для HTTP-интерфейса Elasticsearch (чтобы Elasticsearch отвечал по HTTPS):
+xpack.security.http.ssl.enabled: true
+xpack.security.http.ssl.keystore.path: elastic-certificates.p12
+xpack.security.http.ssl.truststore.path: elastic-certificates.p12
+Открываем конфигурацию Kibana:
+sudo nano /etc/kibana/kibana.yml
+Настраиваем следующим образом:
+server.host: "172.28.2.27"
+server.port: 5601
+# Включаем HTTPS для Kibana:
+server.ssl.enabled: true
+server.ssl.certificate: /etc/kibana/certs/kibana.crt
+server.ssl.key: /etc/kibana/certs/kibana.key
+# Правильное указание Kibana publicBaseUrl через HTTPS:
+server.publicBaseUrl: "https://172.28.2.27:5601"
+# Elasticsearch подключение (теперь через HTTPS):
+elasticsearch.hosts: ["https://172.28.2.27:9200"]
+elasticsearch.username: "kibana_system"
+elasticsearch.password: "ВАШ_ПАРОЛЬ"
+# Чтобы Kibana доверяла самоподписанному сертификату Elasticsearch:
+elasticsearch.ssl.verificationMode: none
+
+Смотрим что файлы сертификатов `/etc/kibana/certs/kibana.crt` и ключа `/etc/kibana/certs/kibana.key` существуют и доступны пользователю `kibana`: 
+sudo ls -l /etc/kibana/certs/
+Должно быть примерно так:
+-rw------- 1 kibana kibana kibana.crt
+-rw------- 1 kibana kibana kibana.key
+если нет то выше описано то и выше и ниже написано как поменять права
+И смотрим, что Elasticsearch запущен и доступен по HTTPS:
+curl -k -u elastic:ВАШ_ПАРОЛЬ https://172.28.2.27:9200
+
+
+Перезапускаем кибану и смотрим в браузере что все работает 
+
+Все данные Эластика и кибаны будут храниться на HDD а система будет на SSD соответственно после установки переносим данные на HDD это будет диск sdb1
+Монтируем диск, прописываем его уид в FStab что бы он автоматически монтировался при загрузки системы поехали
+Останавливаем оба сервиса, чтобы безопасно перенести данные:
+sudo systemctl stop kibana.service
+sudo systemctl stop elasticsearch.service
+
+Переносим данные Elasticsearch из стандартного пути `/var/lib/elasticsearch/`:
+sudo rsync -av /var/lib/elasticsearch/ /mnt/sdb1/elasticsearch/
+sudo rsync -avh /var/log/elasticsearch/ /mnt/sdb1/elasticsearch/logs/
+
+Убедимся, что владелец данных корректный (`elasticsearch`):
+sudo chown -R elasticsearch:elasticsearch /mnt/sdb1/elasticsearch
+sudo chown -R elasticsearch:elasticsearch /mnt/sdb1/elasticsearch/logs
+Указываем новый путь к данным Elasticsearch в конфиге Редактируем файл:
+sudo nano /etc/elasticsearch/elasticsearch.yml
+
+Находим (или добавляем) строку:
+path.data: /mnt/sdb1/elasticsearch
+path.logs: /mnt/sdb1/elasticsearch/logs
+
+Переносим и настраиваем логи Kibana (опционально, но для порядка лучше перенести) Стандартное место логов Kibana — `/var/log/kibana/`. Переносим их:
+sudo rsync -av /var/log/kibana/ /mnt/sdb1/kibana-logs/
+sudo chown -R kibana:kibana /mnt/sdb1/kibana-logs
+
+Теперь указываем Kibana новый путь для логов (опционально):
+sudo nano /etc/kibana/kibana.yml
+Добавляем/меняем строку:
+logging.dest: /mnt/sdb1/kibana-logs/kibana.log
+
+Проверим, что Elasticsearch и Kibana начали писать логи в новую директорию:
+sudo ls -l /mnt/sdb1/elasticsearch/logs
+sudo tail -f /mnt/sdb1/kibana-logs/kibana.log
+
+файл JVM-конфигурации, для настройки джавы в эластике находится тут:
+/etc/elasticsearch/jvm.options, но начиная с Elasticsearch версии 7.x, разработчики рекомендуют устанавливать JVM-настройки **не напрямую в файле** `/etc/elasticsearch/jvm.options`, а через дополнительный каталог:
+/etc/elasticsearch/jvm.options.d/ Это сделано для того, чтобы было удобнее и безопаснее устанавливать собственные настройки, не изменяя основной конфигурационный файл Elasticsearch (потому что он может переписываться при обновлениях Elasticsearch)
+# Создаем новый файл heap.options:(при его создании эластик автоматически будет подхватывать прописанные в нем настройки как приоритетные)
+sudo nano /etc/elasticsearch/jvm.options.d/heap.options
+# Вставляем нужные значения, допустим:
+-Xms2g
+-Xmx2g
+# Применяем правильные права:
+sudo chown elasticsearch:elasticsearch /etc/elasticsearch/jvm.options.d/heap.options
+sudo chmod 660 /etc/elasticsearch/jvm.options.d/heap.options
+# Перезапускаем Elasticsearch:
+sudo systemctl restart elasticsearch
+
+что бы веб интерфейс кибаны не бесил ошибкой server.publicBaseUrl is missing and should be configured when running in a production environment. Some features may not behave correctly. See the documentation нужно в конфиге:
+sudo nano /etc/kibana/kibana.yml прописать
+server.publicBaseUrl: "http://172.28.2.27:5601"
+Эта настройка необходима Kibana для формирования корректных ссылок и URL-адресов (например, ссылки на отчёты, уведомления, письма и т.д.). Если вы ее не укажете, некоторые функции (например, отправка отчётов, уведомлений, алертов и ссылок в уведомлениях) могут работать некорректно или вообще не работать.
+
+запрос сколько эластик использует оперативки в данный момент curl -u elastic:ВАШ_ПАРОЛЬ -X GET "http://172.28.2.27:9200/_nodes/stats/jvm?pretty"
