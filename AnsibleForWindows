@@ -1,0 +1,243 @@
+Настройка Ansible для виндовс хоста 
+Убедись что установилось ansible --version
+
+Для работы понадобится рабочая директория создадим ее допустим в рабочем каталоге пользователя mkdir ansible  назовем ее ansible
+Конфигурационный файл Ansible (ansible.cfg) может располагаться по следующим адресам:
+
+переменная окружения ANSIBLE_CONFIG (если она задана); 
+./ansible.cfg (в текущей директории); 
+~/.ansible.cfg (в домашней директории); 
+/etc/ansible/ansible.cfg (в каталоге, сгенерированном при установке Ansible через менеджер пакетов). 
+Ansible читает конфигурационный файл в следующем порядке:
+
+Проверяется переменная окружения ANSIBLE_CONFIG, которая может указывать на файл конфигурации. 
+Если переменная не найдена, то проверяется файл ./ansible.cfg в текущей директории. 
+Если файл не найден, то проверяется ~/.ansible.cfg в домашней директории. 
+Если и этот файл не найден, то используется файл /etc/ansible/ansible.cfg. 
+Ansible использует первый найденный файл, все остальные игнорируются
+
+По умолчанию Ansible использует файл /etc/ansible/hosts для хранения инвентаря. Это файл, содержащий список хостов и групп хостов, которыми управляет Ansible. много где его советуют называть inventory
+Чтобы указать другое расположение файла, можно использовать флаг -i или конфигурационный файл ansible.cfg. 
+Ansible читает инвентарь так, что по умолчанию создаёт две группы: all и ungrouped. Группа all содержит все хосты, а ungrouped — все хосты, которые не имеют другой группы, кроме all.
+Я создам ansible.cfg и inventory в нашей домашней директории в папке ансибл которую мы создали ранее ~/ansible
+Что бы нам не указывать постоянно инвентарный файл ансиблу при команде, укажем путь до него  в файле ansible.cfg по скольку переменная оркужения у нас не задана ансибл будет искать файл в текущей директории, что нам и нужно 
+Настраиваем inventory файл тут мы указываем хосты к которым будем подключаться и все параметры подключения
+Создаем группу windows и добовляем туда нужные хосты называя их подустим windows_host указываем ip и нужные параметры, о них чуть позже, так для группы виндовс создаем глобальные переменные которые будут применяться ко всей группе [windows:vars]
+
+ansible_user=User
+Имя пользователя, которое будет использоваться для подключения к Windows-хостам.
+
+ansible_password=
+Пароль для пользователя User.
+
+ansible_connection=winrm
+Указывает, что для подключения к хостам будет использоваться протокол WinRM (Windows Remote Management).
+
+ansible_winrm_transport=basic
+Определяет тип аутентификации для WinRM. В данном случае используется basic (базовая аутентификация).
+
+ansible_port=5985
+Порт, который будет использоваться для подключения по WinRM. По умолчанию для HTTP используется порт 5985.
+
+ansible_winrm_scheme=http
+Указывает схему подключения. В данном случае используется HTTP (без шифрования).
+
+ansible_winrm_server_cert_validation=ignore
+Отключает проверку сертификата сервера. Это полезно, если используется самоподписанный сертификат или HTTP.
+
+ansible_python_interpreter=""
+Указывает путь к интерпретатору Python. В данном случае значение пустое, что означает использование интерпретатора по умолчанию.     
+
+Дублирование настроек может быть полезным в следующих случаях:
+Переопределение глобальных настроек для конкретного хоста.
+Например, если для большинства хостов используется один пользователь, но для конкретного хоста нужно использовать другого пользователя, можно переопределить ansible_user и ansible_password для этого хоста.
+
+Упрощение конфигурации.
+Если большинство настроек одинаковы для всех хостов, их можно задать в [windows:vars], а для хостов, где нужны исключения, переопределить только необходимые параметры.
+
+Читаемость и поддержка.
+Глобальные настройки делают конфигурацию более компактной и удобной для чтения, а переопределение на уровне хоста позволяет явно указать, какие параметры отличаются.
+
+Идем на виндовс хост создаем пользователя которому дадим админские права и через которого будет рулить ансибл собственно чей пароль мы добавим в глобальные переменные ansible_password=
+Далее запускаем повер шел от админа и команду Get-NetConnectionProfile смотрим номер нашей сети и подставляем его сюда Get-NetConnectionProfile -InterfaceIndex 4 NetworkCategory Private  что бы изменить сеть на приватную, в общедоступных не работает
+А что бы при ребуте настройки сети не сбрасывались на PUBLIC надо сделать следующее 
+
+# Установим постоянный Private профиль для Ethernet
+
+$ethernetProfile = Get-NetConnectionProfile -InterfaceAlias "Ethernet" -ErrorAction SilentlyContinue
+if ($ethernetProfile) {
+    Set-NetConnectionProfile -InputObject $ethernetProfile -NetworkCategory Private
+    Write-Host "Ethernet profile permanently set to Private" -ForegroundColor Green
+}
+
+Перезагрузка WinRM
+1
+Restart-Service WinRM -Force
+Установим WinRM к нему и будет подключаться ансибл, введем команду  winrm quickconfig
+
+далее влючаем протокол передачи басик и еще одну полезную штуку забыл что она делает потом допишу 
+winrm set winrm/config/service '@{AllowUnencrypted="true"}'
+winrm set winrm/config/service/auth '@{Basic="true"}'
+
+Добавляем ансибл хост в доверенные
+winrm set winrm/config/client '@{TrustedHosts="Х.Х.Х.Х"}'
+Это разрешит подключение с любого хоста в подсети Х.Х.Х.Х.
+
+Открываем порты для HTTP и если нужно HTTPS
+New-NetFirewallRule -DisplayName "Allow WinRM HTTP" -Direction Inbound -LocalPort 5985 -Protocol TCP -Action Allow
+New-NetFirewallRule -DisplayName "Allow WinRM HTTPS" -Direction Inbound -LocalPort 5986 -Protocol TCP -Action Allow
+
+Restart-Service WinRM
+
+Chocolatey — это менеджер пакетов для Windows, Установим его, вдруг понадобится установить или скачать что то общеизвестное что можно будет взять с его репозитория обойдя всякие передачи данных 
+Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+Возвращаемся на линукс, теперь по скольку в конфиге мы указали какой файл использовать а конфиг он читает с нашей рабочей директории пишем просто ansible -m win_ping (можно дописать в конце -vvv для выведения логов ) где -m  это модуль, который называется win_ping, если использовать просто ping то будет ошибка по скольку исполнение у ансибла идет на питоне если использовать модуль по умолчанию, а виндовс его не понимает 
+сейчас мы должны получить пинг понг если нет то зови как раз поправим инструкцию 
+для запуска плейбука используем команду ansible-playbook playbookname, файл инвентори в команде не указываем так как в конфиге прописали какой файл смотреть 
+
+Скрипт для настройки виндовс хоста для Ansible
+# Setup-Ansible-Target.ps1 - Автоматическая настройка Windows для Ansible
+
+Write-Host "=== Настройка Windows для Ansible ===" -ForegroundColor Cyan
+
+# 1. Создание пользователя для Ansible
+Write-Host "`n1. Создание пользователя Ansible..." -ForegroundColor Yellow
+$username = "User"
+$password = "password"
+
+# Проверяем существование пользователя
+$userExists = Get-LocalUser -Name $username -ErrorAction SilentlyContinue
+if (-not $userExists) {
+    # Создаем пользователя
+    $securePassword = ConvertTo-SecureString $password -AsPlainText -Force
+    New-LocalUser -Name $username -Password $securePassword -FullName "Ansible Control User" -Description "User for Ansible automation"
+    Write-Host "Пользователь $username создан" -ForegroundColor Green
+} else {
+    Write-Host "Пользователь $username уже существует" -ForegroundColor Yellow
+}
+
+# Добавляем в группу администраторов
+Add-LocalGroupMember -Group "Administrators" -Member $username -ErrorAction SilentlyContinue
+Write-Host "Пользователь добавлен в группу Administrators" -ForegroundColor Green
+
+# 2. Настройка сетевого профиля
+Write-Host "`n2. Настройка сетевого профиля..." -ForegroundColor Yellow
+
+# Получаем все сетевые профили
+$profiles = Get-NetConnectionProfile
+
+foreach ($profile in $profiles) {
+    Write-Host "Меняем профиль сети $($profile.Name) на Private (InterfaceIndex: $($profile.InterfaceIndex))" -ForegroundColor White
+    Set-NetConnectionProfile -InterfaceIndex $profile.InterfaceIndex -NetworkCategory Private
+}
+
+# Установка постоянного Private профиля для Ethernet
+$ethernetProfile = Get-NetConnectionProfile -InterfaceAlias "Ethernet" -ErrorAction SilentlyContinue
+if ($ethernetProfile) {
+    Set-NetConnectionProfile -InputObject $ethernetProfile -NetworkCategory Private
+    Write-Host "Ethernet профиль установлен как Permanent Private" -ForegroundColor Green
+}
+
+# 3. Установка и настройка WinRM
+Write-Host "`n3. Установка и настройка WinRM..." -ForegroundColor Yellow
+
+# Проверяем установлен ли WinRM
+$winrmService = Get-Service WinRM -ErrorAction SilentlyContinue
+
+if (-not $winrmService) {
+    Write-Host "WinRM не установлен. Устанавливаем..." -ForegroundColor Yellow
+    # Включаем WinRM через DISM (для Windows)
+    Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Windows-SMBServer -All -NoRestart
+    Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Windows-SMBDirect -All -NoRestart
+}
+
+# Быстрая конфигурация WinRM
+Write-Host "Настройка WinRM..." -ForegroundColor White
+winrm quickconfig -quiet -force
+
+# Включение Basic аутентификации и незашифрованного трафика
+Write-Host "Включение Basic аутентификации..." -ForegroundColor White
+winrm set winrm/config/service '@{AllowUnencrypted="true"}'
+winrm set winrm/config/service/auth '@{Basic="true"}'
+
+# Добавление подсети в доверенные хосты
+Write-Host "Добавление доверенных хостов..." -ForegroundColor White
+winrm set winrm/config/client '@{TrustedHosts="[x.x.x.x"}'
+
+# 4. Открытие портов в фаерволе
+Write-Host "`n4. Настройка фаервола..." -ForegroundColor Yellow
+
+# Проверяем существование правил
+$httpRule = Get-NetFirewallRule -DisplayName "Allow WinRM HTTP" -ErrorAction SilentlyContinue
+$httpsRule = Get-NetFirewallRule -DisplayName "Allow WinRM HTTPS" -ErrorAction SilentlyContinue
+
+if (-not $httpRule) {
+    New-NetFirewallRule -DisplayName "Allow WinRM HTTP" -Direction Inbound -LocalPort 5985 -Protocol TCP -Action Allow
+    Write-Host "Правило для WinRM HTTP (5985) создано" -ForegroundColor Green
+} else {
+    Write-Host "Правило для WinRM HTTP уже существует" -ForegroundColor Yellow
+}
+
+if (-not $httpsRule) {
+    New-NetFirewallRule -DisplayName "Allow WinRM HTTPS" -Direction Inbound -LocalPort 5986 -Protocol TCP -Action Allow
+    Write-Host "Правило для WinRM HTTPS (5986) создано" -ForegroundColor Green
+} else {
+    Write-Host "Правило для WinRM HTTPS уже существует" -ForegroundColor Yellow
+}
+
+# 5. Перезапуск WinRM
+Write-Host "`n5. Перезапуск WinRM..." -ForegroundColor Yellow
+Restart-Service WinRM -Force
+Write-Host "Служба WinRM перезапущена" -ForegroundColor Green
+
+# 6. Установка Chocolatey (опционально)
+Write-Host "`n6. Установка Chocolatey..." -ForegroundColor Yellow
+$chocoCheck = Get-Command choco -ErrorAction SilentlyContinue
+if (-not $chocoCheck) {
+    try {
+        Set-ExecutionPolicy Bypass -Scope Process -Force
+        [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+        iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+        Write-Host "Chocolatey установлен" -ForegroundColor Green
+    } catch {
+        Write-Host "Ошибка установки Chocolatey: $_" -ForegroundColor Red
+    }
+} else {
+    Write-Host "Chocolatey уже установлен" -ForegroundColor Yellow
+}
+
+# 7. Дополнительные настройки для надежности
+Write-Host "`n7. Дополнительные настройки..." -ForegroundColor Yellow
+
+# Настройка службы WinRM для автоматического запуска
+Set-Service WinRM -StartupType Automatic
+Write-Host "WinRM настроен на автоматический запуск" -ForegroundColor Green
+
+# Проверяем что WinRM слушает нужные порты
+$listeners = winrm e winrm/config/listener
+Write-Host "Конфигурация listeners WinRM:" -ForegroundColor White
+$listeners
+
+# 8. Проверка настроек
+Write-Host "`n8. Проверка настроек..." -ForegroundColor Yellow
+
+Write-Host "Сетевые профили:" -ForegroundColor White
+Get-NetConnectionProfile | Format-Table InterfaceIndex, Name, NetworkCategory
+
+Write-Host "Статус WinRM:" -ForegroundColor White
+Get-Service WinRM | Format-Table Name, Status, StartType
+
+Write-Host "Правила фаервола:" -ForegroundColor White
+Get-NetFirewallRule -DisplayName "Allow WinRM*" | Format-Table DisplayName, Enabled, Direction, Action
+
+Write-Host "Созданные пользователи:" -ForegroundColor White
+Get-LocalUser -Name $username | Format-Table Name, Enabled, Description
+
+Write-Host "`n=== Настройка завершена! ===" -ForegroundColor Cyan
+Write-Host "Для тестирования подключения с Ansible-хоста выполните:" -ForegroundColor White
+Write-Host "ansible -i inventory windows -m win_ping" -ForegroundColor Green
+Write-Host "Учетные данные: $username / $password" -ForegroundColor Yellow
+
+# Пауза для просмотра результатов
+Write-Host "`nНажмите любую клавишу для выхода..." -ForegroundColor Gray
+$null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
