@@ -1,0 +1,48 @@
+Basic Мониторинг RabbitMQ через API
+Общее количество количество сообщений во всех очередях 
+
+Скрипты которые использует забикс сервер по типу External Chek лежат по пути /usr/lib/zabbix/externalscripts
+
+
+Немного обезопасил все это дело,  сделал секрет по пути /бла/бла/бла/бла и дал 600 права на файл, соответственно в скриптах прописал путь до переменных и подставил их вместо данных
+
+для общих очередей называется rabbitmq_messages.sh, содержание
+
+source /путь до секрета
+
+ curl -s -u core:core http://10.0.0.108:15672/api/queues/%2F | jq 'map(.messages) | add'
+
+Что делает этот скрипт:
+Подключается к API RabbitMQ на хосте X.X.X.X с логином/паролем login:password.
+Запрашивает список всех очередей в виртуальном хосте / (кодируется как %2F).
+С помощью jq извлекает все значения messages из JSON-ответа и суммирует их (map(.messages) | add).Возвращает общее количество сообщений во всех очередях на виртуальном хосте
+настройка итема в веб интерфейсе забикс 
+
+Общее количество очередей скрипт лежит там же и называется rabbitmq_total_queues.sh 
+Содержание 
+
+#!/bin/bash
+# Скрипт возвращает общее количество очередей в RabbitMQ
+source (указваем путь до переменных)
+# Выполняем запрос к API и подсчитываем количество элементов в массиве (очередей)
+curl -s -u "$RABBITMQ_USER:$RABBITMQ_PASS" "http://$RABBITMQ_HOST:15672/api/queues/%2F" | jq 'length'
+
+Кол-во соединений (Connections)
+Скрипт: rabbitmq_total_connections.sh
+
+#!/bin/bash
+source /etc/zabbix/.secrets/rabbitmq_credentials
+curl -s -u core:core http://X.X.X.X:15672/api/connections | jq 'length'
+
+Кол-во каналов (Channels)
+Скрипт: rabbitmq_total_channels.sh
+
+bash
+#!/bin/bash
+
+source путь до секрета
+
+curl -s -u core:core http://10.0.0.108:15672/api/channels | jq 'length'
+
+
+и в таком духе скрипты можно посмотреть по пути как указано выше, итемы в забиксе 
